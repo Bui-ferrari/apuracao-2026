@@ -25,11 +25,21 @@ button,select,input{font:inherit;color:var(--ink)}
 .dot{width:9px;height:9px;border-radius:50%;background:var(--ok);animation:pulse 1.6s infinite}
 .dot.err{background:var(--bad);animation:none}
 @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(46,204,113,.6)}70%{box-shadow:0 0 0 9px rgba(46,204,113,0)}100%{box-shadow:0 0 0 0 rgba(46,204,113,0)}}
-.chips{display:flex;gap:8px;margin-top:8px;overflow-x:auto;padding-bottom:2px}
+.tb2{display:flex;gap:8px;margin-top:8px;align-items:stretch}
+.chips{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px;flex:1 1 auto;min-width:0}
+#diffBox{flex:0 0 auto;display:flex}
+@media (max-width:820px){.tb2{flex-direction:column}}
 .chip{flex:0 0 auto;display:flex;flex-direction:column;gap:3px;min-width:132px;padding:7px 10px;border-radius:12px;background:var(--bg);border:1px solid var(--line);border-left:5px solid var(--nd)}
 .chip .n{font-size:13px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:170px}
 .chip .p{font-size:22px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1}
 .chip .s{font-size:11px;color:var(--mute)}
+.diff{width:430px;max-width:100%;display:flex;gap:12px;align-items:center;padding:7px 12px;border-radius:12px;background:var(--bg);border:1px solid var(--line)}
+.diff .dt{min-width:150px}
+.diff .dv{font-size:20px;font-weight:800;font-variant-numeric:tabular-nums;line-height:1.1}
+.diff .spark{flex:1;min-width:150px;display:flex;flex-direction:column;gap:2px}
+.diff svg{width:100%;height:44px;display:block}
+.diff .ax{stroke:var(--line);stroke-width:1}
+.diff .lbl{font-size:10px;fill:var(--mute)}
 /* layout */
 #layout{display:grid;grid-template-columns:minmax(300px,44%) 1fr;gap:12px;padding:12px 16px}
 @media (max-width:820px){#layout{grid-template-columns:1fr}}
@@ -78,7 +88,7 @@ a{color:var(--acc)}
     <button class="btn" id="theme" title="Tema">🌓</button>
     <span class="live"><span class="dot" id="dot"></span><span id="status">conectando…</span></span>
   </div>
-  <div class="chips" id="brChips"></div>
+  <div class="tb2"><div class="chips" id="brChips"></div><div id="diffBox"></div></div>
 </div>
 
 <div id="layout">
@@ -116,7 +126,7 @@ a{color:var(--acc)}
 <footer>Dados abertos oficiais do TSE (resultados.tse.jus.br), lidos direto deste navegador a cada 30 s. Cores por orientação do partido do candidato que lidera (classificação aproximada). <a href="completo.html">Página com todos os cargos</a> <span id="wake"></span></footer>
 
 <script>
-const APP_VERSION="5";
+const APP_VERSION="6";
 const BASE="https://resultados.tse.jus.br", CD_F="6257", CD_E="6259", EVERY=30000;
 const UFS=["AC","AL","AM","AP","BA","CE","DF","ES","GO","MA","MG","MS","MT","PA","PB","PE","PI","PR","RJ","RN","RO","RR","RS","SC","SE","SP","TO"];
 const UFNOME={AC:"Acre",AL:"Alagoas",AM:"Amazonas",AP:"Amapá",BA:"Bahia",CE:"Ceará",DF:"Distrito Federal",ES:"Espírito Santo",GO:"Goiás",MA:"Maranhão",MG:"Minas Gerais",MS:"Mato Grosso do Sul",MT:"Mato Grosso",PA:"Pará",PB:"Paraíba",PE:"Pernambuco",PI:"Piauí",PR:"Paraná",RJ:"Rio de Janeiro",RN:"Rio Grande do Norte",RO:"Rondônia",RR:"Roraima",RS:"Rio Grande do Sul",SC:"Santa Catarina",SE:"Sergipe",SP:"São Paulo",TO:"Tocantins"};
@@ -164,10 +174,50 @@ $("theme").onclick=()=>{const t=document.documentElement.dataset.theme==="light"
 async function loadBR(){
   const r=parse(await get(1,"br"));
   $("brPst").textContent=fp(r.pst);$("brProg").style.width=(r.pst||0)+"%";
-  const top=r.zero?r.list:r.list.slice(0,6);
+  const top=r.zero?r.list:r.list.slice(0,5);
   $("brChips").innerHTML=top.map(c=>`<div class="chip" style="border-left-color:${COLOR(ideo(c.part))}">
     <span class="n">${esc(c.nm)}</span><span class="p">${fp(c.p)}</span><span class="s">${esc(c.part)} · ${fmt(c.v)}${c.e?" · 🟢 eleito":/2.?\s*turno/i.test(c.st)?" · 🟡 2º turno":""}</span></div>`).join("")+
     (r.zero?"":`<div class="chip" style="justify-content:center"><span class="s">Brancos ${fp(pct((r.d.v||{}).pvb))}<br>Nulos ${fp(pct((r.d.v||{}).ptvn))}<br>Comparec. ${fp(pct((r.d.e||{}).pc))}</span></div>`);
+  $("diffBox").innerHTML=r.zero||r.list.length<2?"":diffHTML(r);
+}
+/* ---------- diferença + histórico ---------- */
+// pontos reais observados antes desta versão (TSE, 04/10/2026)
+const SEED=[{pst:1.97,c:{"FLAVIO BOLSONARO":49.36,"LULA":42.08}},{pst:21.96,c:{"FLAVIO BOLSONARO":51.07,"LULA":40.82}}];
+let HIST=(()=>{try{const h=JSON.parse(localStorage.getItem("hist1")||"null");if(Array.isArray(h)&&h.length)return h}catch(e){}return SEED.slice()})();
+function recordHist(r){
+  if(r.zero||r.pst==null)return;
+  const last=HIST[HIST.length-1];
+  if(last&&Math.abs(last.pst-r.pst)<0.005)return;
+  const c={};r.list.slice(0,4).forEach(x=>c[x.nm]=x.p);
+  HIST.push({pst:r.pst,c});HIST.sort((a,b)=>a.pst-b.pst);
+  if(HIST.length>400)HIST=HIST.slice(-400);
+  try{localStorage.setItem("hist1",JSON.stringify(HIST))}catch(e){}
+}
+function diffHTML(r){
+  recordHist(r);
+  const a=r.list[0],b=r.list[1];
+  const dv=(a.v||0)-(b.v||0), dp=(a.p||0)-(b.p||0), ratio=b.v?((a.v/b.v-1)*100):null;
+  const first=x=>esc(x.nm.split(" ")[0][0]+x.nm.split(" ")[0].slice(1).toLowerCase());
+  // mini-gráfico: diferença em pontos (1º − 2º) ao longo do % apurado
+  const W=260,H=50,P=4;
+  const pts=HIST.filter(h=>h.c[a.nm]!=null&&h.c[b.nm]!=null).map(h=>({x:h.pst,y:h.c[a.nm]-h.c[b.nm]}));
+  let svg="",cap="";
+  if(pts.length>=2){
+    const x0=pts[0].x,x1=pts[pts.length-1].x;
+    let y0=Math.min(0,...pts.map(p=>p.y)),y1=Math.max(...pts.map(p=>p.y));const pad=Math.max(0.5,(y1-y0)*0.12);y1+=pad;if(y0<0)y0-=pad;
+    const X=v=>P+(x1===x0?0:(v-x0)/(x1-x0))*(W-2*P), Y=v=>H-P-(v-y0)/(y1-y0)*(H-2*P);
+    const d=pts.map((p,i)=>(i?"L":"M")+X(p.x).toFixed(1)+","+Y(p.y).toFixed(1)).join("");
+    const area=d+`L${X(x1).toFixed(1)},${Y(0).toFixed(1)}L${X(x0).toFixed(1)},${Y(0).toFixed(1)}Z`;
+    const col=COLOR(ideo(a.part)),l=pts[pts.length-1];
+    svg=`<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-label="Evolução da diferença">
+      <path d="${area}" fill="${col}" opacity=".18"/><line class="ax" x1="${P}" y1="${Y(0).toFixed(1)}" x2="${W-P}" y2="${Y(0).toFixed(1)}" vector-effect="non-scaling-stroke"/>
+      <path d="${d}" fill="none" stroke="${col}" stroke-width="2.4" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg>`;
+    const f2=v=>v.toLocaleString("pt-BR",{minimumFractionDigits:1,maximumFractionDigits:1});
+    cap=`<span class="s">${f2(pts[0].y)} → ${f2(l.y)} pts (de ${pctShort(x0)} a ${pctShort(x1)} apurado)</span>`;
+  } else svg=`<span class="s">O gráfico aparece a partir da próxima atualização.</span>`;
+  return `<div class="diff"><div class="dt"><span class="s">Diferença ${first(a)} − ${first(b)}</span>
+    <div class="dv">${fmt(dv)} votos</div>
+    <span class="s">${dp.toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2})} pontos · ${ratio==null?"—":ratio.toLocaleString("pt-BR",{maximumFractionDigits:1})+"% a mais"}</span></div><div class="spark">${svg}${cap}</div></div>`;
 }
 
 /* ---------- mapa ---------- */
