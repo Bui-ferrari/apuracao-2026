@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Apuração 2026</title>
+<style>
+:root{--bg:#f6f5f2;--card:#fff;--ink:#1c1c1c;--mute:#6b6b6b;--line:#e4e2dc;--acc:#2b59c3;--ok:#1f8a4c;--warn:#c98a00;--bad:#c0392b;--bar:#cfd8ee}
+@media (prefers-color-scheme:dark){:root{--bg:#141414;--card:#1e1e1e;--ink:#eee;--mute:#9a9a9a;--line:#2e2e2e;--acc:#7aa2ff;--bar:#2c3550}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:860px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin:0 0 4px}.sub{color:var(--mute);font-size:13px}
+.tabs{display:flex;gap:6px;margin:14px 0 8px;flex-wrap:wrap}
+.tabs button,.uf{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:999px;padding:7px 14px;font:inherit;cursor:pointer}
+.tabs button.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:10px 0}
+.prog{height:10px;background:var(--line);border-radius:6px;overflow:hidden;margin:6px 0}
+.prog>i{display:block;height:100%;background:var(--acc)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px}
+.kpi b{display:block;font-size:20px}.kpi span{color:var(--mute);font-size:12px}
+.cand{padding:10px 0;border-top:1px solid var(--line)}.cand:first-child{border-top:0}
+.ch{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.nm{font-weight:600}.pc{font-weight:700;font-variant-numeric:tabular-nums}
+.meta{color:var(--mute);font-size:12px}
+.bar{height:8px;background:var(--line);border-radius:5px;overflow:hidden;margin-top:6px}.bar>i{display:block;height:100%;background:var(--bar)}
+.lead .bar>i{background:var(--acc)}
+.tag{font-size:11px;padding:2px 8px;border-radius:999px;margin-left:6px;white-space:nowrap}
+.t-el{background:#d9f2e3;color:var(--ok)}.t-2t{background:#fff1cc;color:#8a5d00}
+.err{border-color:var(--bad)}.err h3{margin:0 0 6px;color:var(--bad);font-size:15px}
+details{margin-top:14px}summary{cursor:pointer;color:var(--mute);font-size:13px}
+input{font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);width:100%}
+label{font-size:12px;color:var(--mute);display:block;margin-top:8px}
+a{color:var(--acc)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🗳️ Apuração — Eleições 2026 (1º turno)</h1>
+  <div class="sub">Fonte: dados abertos oficiais do TSE (resultados.tse.jus.br), lidos direto do seu navegador. Atualiza a cada 30 s. <a href="./">← Painel ao vivo</a> <span id="clock"></span></div>
+
+  <div class="tabs" id="tabs">
+    <button data-c="1" class="on">Presidente</button>
+    <button data-c="3">Governador</button>
+    <button data-c="5">Senador</button>
+    <button data-c="6">Dep. Federal</button>
+    <button data-c="7">Dep. Estadual</button>
+  </div>
+  <div class="row">
+    <select class="uf" id="uf"></select>
+    <button class="uf" id="refresh">↻ Atualizar</button>
+  </div>
+  <div id="searchRow" style="display:none;margin-top:8px"><input id="q" placeholder="🔎 Buscar candidato, número ou partido"></div>
+
+  <div id="out"><div class="card">Carregando…</div></div>
+
+  <details>
+    <summary>⚙️ Configuração avançada</summary>
+    <label>Código da eleição federal (Presidente) — vazio = detectar automático</label>
+    <input id="cdF" value="6257">
+    <label>Código da eleição estadual (Governador/Senador) — vazio = detectar automático</label>
+    <input id="cdE" value="6259">
+    <label>Base dos dados (troque se usar um proxy)</label>
+    <input id="base" value="https://resultados.tse.jus.br">
+    <p class="meta" id="diag"></p>
+  </details>
+</div>
+<script>
+const UFS=["BR","AC","AL","AM","AP","BA","CE","DF","ES","GO","MA","MG","MS","MT","PA","PB","PE","PI","PR","RJ","RN","RO","RR","RS","SC","SE","SP","TO","ZZ"];
+const UFN={BR:"Brasil",ZZ:"Exterior"};
+const $=id=>document.getElementById(id);
+let cargo=1, uf="BR", codes={F:null,E:null}, timer=null, diag=[];
+const ufSel=$("uf");
+function fillUF(){
+  const st=UFS.filter(u=>u!=="BR"&&u!=="ZZ");
+  const list=cargo===1?UFS:st;
+  if(!list.includes(uf)) uf=cargo===1?"BR":"SP";
+  ufSel.innerHTML=list.map(u=>`<option value="${u}" ${u===uf?"selected":""}>${UFN[u]||u}</option>`).join("");
+}
+const num=v=>{if(v==null||v==="")return null;const n=parseFloat(String(v).replace(/\./g,"").replace(",","."));return isNaN(n)?null:n};
+const pct=v=>{if(v==null||v==="")return null;const n=parseFloat(String(v).replace(",","."));return isNaN(n)?null:n};
+const fmt=n=>n==null?"—":n.toLocaleString("pt-BR");
+const fp=n=>n==null?"—":n.toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2})+"%";
+const base=()=>$("base").value.replace(/\/$/,"");
+async function getJSON(path){
+  const url=base()+path+(path.includes("?")?"&":"?")+"_="+Date.now();
+  const r=await fetch(url,{cache:"no-store"});
+  if(!r.ok) throw new Error("HTTP "+r.status+" em "+path);
+  return r.json();
+}
+// Walk config to find 2026 elections (format may vary; search generically)
+function findElections(cfg){
+  const found=[];
+  (function walk(o){
+    if(!o||typeof o!=="object")return;
+    if(Array.isArray(o)){o.forEach(walk);return}
+    const name=String(o.nm||o.ds||o.nome||"");
+    if(o.cd&&name) found.push({cd:String(o.cd),nm:name,t:String(o.t||o.turno||""),dt:String(o.dt||"")});
+    Object.values(o).forEach(walk);
+  })(cfg);
+  return found;
+}
+async function discover(){
+  const mF=$("cdF").value.trim(), mE=$("cdE").value.trim();
+  if(mF) codes.F=mF; if(mE) codes.E=mE;
+  if(codes.F&&codes.E) return;
+  const cfg=await getJSON("/oficial/comum/config/ele-c.json");
+  const els=findElections(cfg);
+  diag.push("Eleições no config: "+els.map(e=>e.cd+" "+e.nm+(e.t?" (t"+e.t+")":"")).join(" | "));
+  const of26=els.filter(e=>/2026/.test(e.nm)||/2026/.test(e.dt));
+  const pool=of26.length?of26:els;
+  const t1=pool.filter(e=>!e.t||e.t==="1");
+  const pick=re=>(t1.find(e=>re.test(e.nm))||{}).cd;
+  codes.F=codes.F||pick(/federal/i);
+  codes.E=codes.E||pick(/estadua/i);
+  if(!codes.F&&!codes.E) throw new Error("Não achei o código da eleição de 2026 no config do TSE. Preencha manualmente em Configuração avançada.");
+}
+function resultPath(){
+  const cd=cargo===1?codes.F:(codes.E||codes.F);
+  const u=uf.toLowerCase();
+  const cg=(cargo===7&&uf==="DF")?8:cargo; // DF elege deputado distrital
+  return `/oficial/ele2026/${cd}/dados/${u}/${u}-c${String(cg).padStart(4,"0")}-e${String(cd).padStart(6,"0")}-u.json`;
+}
+function render(d){
+  const S=d.s||{}, E=d.e||{}, V=d.v||{}, carg=(d.carg||[])[0]||{};
+  const list=[];
+  (carg.agr||[]).forEach(a=>(a.par||[]).forEach(p=>(p.cand||[]).forEach(c=>list.push({
+    nm:c.nmu||c.nm||"?", n:c.n||"", part:p.sg||a.com||"", v:num(c.vap), p:pct(c.pvap),
+    e:String(c.e||"").toLowerCase()==="s", st:String(c.st||""), dvt:String(c.dvt||"")}))));
+  list.sort((a,b)=>(b.v||0)-(a.v||0));
+  const pst=pct(S.pst), fin=d.tf==="s";
+  const vagas=+carg.nv||1;
+  let h=`<div class="card"><div class="ch"><span class="nm">Seções totalizadas ${fin?"<span class='tag t-el'>🟢 totalização final</span>":""}</span><span class="pc">${fp(pst)}</span></div>
+  <div class="prog"><i style="width:${pst||0}%"></i></div>
+  <div class="meta">${fmt(num(S.st))} de ${fmt(num(S.ts))} seções · ${fmt(num(E.te))} eleitores · TSE gerou em ${d.dg||"—"} ${d.hg||""}${d.ht?" · última totalização "+d.ht:""}${vagas>1?" · "+vagas+" vagas":""}</div></div>`;
+  h+=`<div class="kpis">
+   <div class="kpi"><span>Comparecimento</span><b>${fp(pct(E.pc))}</b><span>${fmt(num(E.c))}</span></div>
+   <div class="kpi"><span>Abstenção</span><b>${fp(pct(E.pa))}</b><span>${fmt(num(E.a))}</span></div>
+   <div class="kpi"><span>Votos válidos</span><b>${fp(pct(V.pvvc))}</b><span>${fmt(num(V.vvc))}</span></div>
+   <div class="kpi"><span>Brancos / Nulos</span><b>${fp(pct(V.pvb))} / ${fp(pct(V.ptvn))}</b><span>${fmt(num(V.vb))} / ${fmt(num(V.tvn))}</span></div>
+  </div>`;
+  const zero=!list.some(c=>c.v);
+  const prop=cargo>=6;
+  $("searchRow").style.display=prop?"block":"none";
+  if(prop){
+    const qe=num(carg.qe);
+    const parties=(carg.agr||[]).map(a=>{
+      let v=0,nom=0,leg=0;(a.par||[]).forEach(p=>{nom+=num(p.tvtn)||0;leg+=num(p.tvtl)||0});v=nom+leg;
+      return {nm:a.tp==="i"?((a.par||[])[0]||{}).sg||a.com:(a.nm||a.com), com:a.com||"", vag:num(a.vag)||0, v, nom, leg};
+    }).sort((a,b)=>b.vag-a.vag||b.v-a.v);
+    const maxV=Math.max(1,...parties.map(p=>p.v));
+    h+=`<div class="card"><div class="ch"><span class="nm">🏛️ Vagas por partido / federação</span><span class="meta">${vagas} vagas${qe?" · quociente eleitoral "+fmt(qe):""}</span></div>`+
+      (zero?`<div class="meta" style="margin:6px 0">⏳ Ainda sem votos totalizados — divulgação começa após 17h (Brasília).</div>`:"")+
+      parties.map(p=>`<div class="cand ${p.vag?"lead":""}"><div class="ch"><span><span class="nm">${p.nm}</span>${p.com&&p.com!==p.nm?` <span class="meta">${p.com}</span>`:""}</span><span class="pc">${p.vag} ${p.vag===1?"vaga":"vagas"}</span></div>
+      <div class="meta">${fmt(p.v)} votos (nominais ${fmt(p.nom)} + legenda ${fmt(p.leg)})</div><div class="bar"><i style="width:${p.v/maxV*100}%"></i></div></div>`).join("")+`</div>`;
+    const q=$("q").value.trim().toLowerCase();
+    const fl=q?list.filter(c=>(c.nm+" "+c.n+" "+c.part).toLowerCase().includes(q)):list;
+    const shown=fl.slice(0,q?200:Math.max(vagas,30));
+    const maxC=Math.max(1,...shown.map(c=>c.v||0));
+    h+=`<div class="card"><div class="ch"><span class="nm">👤 Candidatos ${q?"— busca":"mais votados"}</span><span class="meta">mostrando ${shown.length} de ${fl.length}</span></div>`+
+      shown.map(c=>{
+        const tag=c.e?`<span class="tag t-el">🟢 ${c.st||"eleito"}</span>`:/suplente/i.test(c.st)?`<span class="tag" style="background:var(--line)">${c.st}</span>`:"";
+        return `<div class="cand"><div class="ch"><span><span class="nm">${list.indexOf(c)+1}. ${c.nm}</span>${tag}</span><span class="pc">${fmt(c.v)}</span></div>
+        <div class="meta">nº ${c.n} · ${c.part} · ${fp(c.p)}${c.dvt&&!/^v[aá]lido$/i.test(c.dvt)?" · ⚠️ "+c.dvt:""}</div>
+        <div class="bar"><i style="width:${(c.v||0)/maxC*100}%"></i></div></div>`}).join("")+`</div>`;
+  } else {
+  h+=`<div class="card">`+(zero?`<div class="meta" style="margin-bottom:6px">⏳ Ainda sem votos totalizados — divulgação começa após 17h (Brasília).</div>`:"")+
+  (list.length?list.map((c,i)=>{
+    const tag=c.e?`<span class="tag t-el">🟢 eleito</span>`:/2.?\s*turno/i.test(c.st)?`<span class="tag t-2t">🟡 2º turno</span>`:"";
+    const lead=!zero&&i<vagas;
+    return `<div class="cand ${lead?"lead":""}"><div class="ch"><span><span class="nm">${c.nm}</span>${tag}</span><span class="pc">${fp(c.p)}</span></div>
+    <div class="meta">nº ${c.n} · ${c.part} · ${fmt(c.v)} votos${c.dvt&&!/^v[aá]lido$/i.test(c.dvt)?" · ⚠️ "+c.dvt:""}</div>
+    <div class="bar"><i style="width:${c.p||0}%"></i></div></div>`}).join(""):`<div class="meta">Sem candidatos neste arquivo.</div>`)+`</div>`;
+  }
+  $("out").innerHTML=h;
+}
+function showErr(e){
+  $("out").innerHTML=`<div class="card err"><h3>🔴 Não consegui ler os dados do TSE</h3>
+  <div>${e.message}</div>
+  <p class="meta">Causas prováveis: (1) o TSE ainda não publicou o arquivo — a divulgação começa após 17h (Brasília); (2) o navegador bloqueou a busca vinda de outro site (CORS) — nesse caso use um proxy em "Configuração avançada"; (3) o código da eleição mudou. Acompanhe também em <a href="https://resultados.tse.jus.br" target="_blank">resultados.tse.jus.br</a>.</p></div>`;
+}
+let seq=0, lastData=null;
+$("q").oninput=()=>{if(lastData)render(lastData)};
+async function load(){
+  const my=++seq; diag=[];
+  try{
+    await discover();
+    const p=resultPath(); diag.push("Arquivo: "+p);
+    const d=await getJSON(p); if(my!==seq)return; lastData=d; render(d);
+  }catch(e){if(my!==seq)return;showErr(e)}
+  $("diag").textContent=diag.join("  ·  ")+"  ·  códigos: federal="+codes.F+" estadual="+codes.E;
+  $("clock").textContent="Última checagem: "+new Date().toLocaleTimeString("pt-BR");
+}
+$("tabs").onclick=e=>{const b=e.target.closest("button");if(!b)return;
+  document.querySelectorAll("#tabs button").forEach(x=>x.classList.toggle("on",x===b));
+  cargo=+b.dataset.c;$("q").value="";lastData=null;fillUF();load()};
+ufSel.onchange=()=>{uf=ufSel.value;lastData=null;load()};
+$("refresh").onclick=load;
+["cdF","cdE","base"].forEach(id=>$(id).onchange=()=>{codes={F:null,E:null};load()});
+fillUF();load();timer=setInterval(load,30000);
+</script>
+</body>
+</html>
