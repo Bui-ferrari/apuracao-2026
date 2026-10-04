@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Apuração ao vivo</title>
+<style>
+:root{--bg:#0f1115;--card:#181b22;--ink:#f1f1f1;--mute:#9aa0aa;--line:#2a2f3a;--acc:#5b8cff;--ok:#2ecc71;--warn:#f5b301;--bad:#ff5c5c;--bar:#2f3a55}
+:root[data-theme=light]{--bg:#f4f3ef;--card:#fff;--ink:#1b1b1b;--mute:#666;--line:#e3e1db;--acc:#2b59c3;--bar:#cfd8ee}
+*{box-sizing:border-box}html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.35 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid var(--line)}
+header h1{font-size:20px;margin:0;flex:1;min-width:200px}
+.live{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--mute)}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--ok);animation:pulse 1.6s infinite}
+.dot.err{background:var(--bad);animation:none}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(46,204,113,.6)}70%{box-shadow:0 0 0 10px rgba(46,204,113,0)}100%{box-shadow:0 0 0 0 rgba(46,204,113,0)}}
+select,button{font:inherit;font-size:14px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:999px;padding:6px 12px;cursor:pointer}
+nav{display:flex;gap:8px;flex-wrap:wrap;padding:10px 16px 0;align-items:center}
+nav button{font-size:16px;font-weight:700;padding:9px 18px}
+nav button.on{background:var(--acc);border-color:var(--acc);color:#fff}
+nav select.on{background:var(--acc);border-color:var(--acc);color:#fff}
+.mini .kp,.mini .stamp{display:none}.mini .big{font-size:22px}.mini .cand{padding:6px 0}.mini .pc{font-size:16px}
+main{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;padding:12px 16px}
+@media (max-width:900px){main{grid-template-columns:1fr}main>section{grid-row:auto!important}}
+.col{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;display:flex;flex-direction:column;min-width:0}
+.col h2{margin:0;font-size:18px;display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.col h2 small{font-size:12px;color:var(--mute);font-weight:400}
+.prog{height:8px;background:var(--line);border-radius:6px;overflow:hidden;margin:8px 0 4px}
+.prog>i{display:block;height:100%;background:var(--acc);transition:width .8s}
+.meta{color:var(--mute);font-size:12px}
+.big{font-size:28px;font-weight:800;font-variant-numeric:tabular-nums}
+.cand{padding:9px 0;border-top:1px solid var(--line)}
+.ch{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+.nm{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pc{font-weight:800;font-variant-numeric:tabular-nums;font-size:18px}
+.bar{height:7px;background:var(--line);border-radius:5px;overflow:hidden;margin-top:5px}
+.bar>i{display:block;height:100%;background:var(--bar);transition:width .8s}
+.lead .bar>i{background:var(--acc)}.lead .pc{color:var(--acc)}
+.tag{font-size:11px;padding:2px 7px;border-radius:999px;margin-left:6px;white-space:nowrap;font-weight:600}
+.t-el{background:rgba(46,204,113,.18);color:var(--ok)}.t-2t{background:rgba(245,179,1,.18);color:var(--warn)}
+.note{margin-top:8px;font-size:13px;color:var(--mute)}
+.err{color:var(--bad);font-size:13px;margin-top:8px}
+.kp{display:flex;gap:14px;flex-wrap:wrap;margin:4px 0 6px;font-size:12px;color:var(--mute)}
+.kp b{color:var(--ink)}
+footer{padding:6px 16px 14px;font-size:12px;color:var(--mute)}
+</style>
+</head>
+<body>
+<header>
+  <h1>🗳️ Apuração ao vivo · 1º turno 2026</h1>
+  <button id="theme">🌓</button>
+  <span class="live"><span class="dot" id="dot"></span><span id="status">conectando…</span></span>
+</header>
+<nav id="nav">
+  <button data-uf="BR">🇧🇷 Brasil</button>
+  <button data-uf="SP">SP</button><button data-uf="RJ">RJ</button><button data-uf="MG">MG</button><button data-uf="ES">ES</button>
+  <select id="uf" title="Outros estados"></select>
+</nav>
+<main id="main"></main>
+<footer>Dados abertos oficiais do TSE (resultados.tse.jus.br), lidos direto deste navegador a cada 30 s. <a href="completo.html" style="color:var(--acc)">Ver todos os cargos (inclui deputados)</a> <span id="wake"></span></footer>
+<script>
+const APP_VERSION="3";
+const BASE="https://resultados.tse.jus.br", CD_F="6257", CD_E="6259", EVERY=30000;
+const UFS=["AC","AL","AM","AP","BA","CE","DF","ES","GO","MA","MG","MS","MT","PA","PB","PE","PI","PR","RJ","RN","RO","RR","RS","SC","SE","SP","TO"];
+const $=id=>document.getElementById(id);
+const store={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
+const SUDESTE=["SP","RJ","MG","ES"];
+let uf=(new URLSearchParams(location.search).get("uf")||store.get("uf")||"BR").toUpperCase();
+if(uf!=="BR"&&!UFS.includes(uf))uf="BR";
+const others=UFS.filter(u=>!SUDESTE.includes(u));
+$("uf").innerHTML=`<option value="">Outros estados ▾</option>`+others.map(u=>`<option>${u}</option>`).join("");
+function setUF(u){uf=u;store.set("uf",u);syncNav();build();tick()}
+function syncNav(){
+  document.querySelectorAll("#nav button").forEach(b=>b.classList.toggle("on",b.dataset.uf===uf));
+  $("uf").value=others.includes(uf)?uf:"";$("uf").classList.toggle("on",others.includes(uf));
+}
+$("nav").onclick=e=>{const b=e.target.closest("button");if(b)setUF(b.dataset.uf)};
+$("uf").onchange=()=>{if($("uf").value)setUF($("uf").value)};
+const th=store.get("theme");if(th)document.documentElement.dataset.theme=th;
+$("theme").onclick=()=>{const t=document.documentElement.dataset.theme==="light"?"dark":"light";document.documentElement.dataset.theme=t;store.set("theme",t)};
+
+const num=v=>{if(v==null||v==="")return null;const n=parseFloat(String(v).replace(/\./g,"").replace(",","."));return isNaN(n)?null:n};
+const pct=v=>{if(v==null||v==="")return null;const n=parseFloat(String(v).replace(",","."));return isNaN(n)?null:n};
+const fmt=n=>n==null?"—":n.toLocaleString("pt-BR");
+const fp=n=>n==null?"—":n.toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2})+"%";
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+let RACES=[];
+function build(){
+  if(uf==="BR"){
+    RACES=[{id:"r0",cargo:1,cd:CD_F,title:"Presidente",where:"Brasil",u:"br"}]
+      .concat(SUDESTE.map(s=>({id:"r"+s,cargo:1,cd:CD_F,title:"Presidente",where:s,u:s.toLowerCase(),mini:true})));
+    $("main").innerHTML=`<section class="col" id="r0" style="grid-row:span 2"></section>`+
+      SUDESTE.map(s=>`<section class="col mini" id="r${s}"></section>`).join("");
+    $("main").style.gridTemplateColumns="";
+  } else {
+    RACES=[{id:"c1",cargo:1,cd:CD_F,title:"Presidente",where:uf,u:uf.toLowerCase()},
+           {id:"c3",cargo:3,cd:CD_E,title:"Governador",where:uf,u:uf.toLowerCase()},
+           {id:"c5",cargo:5,cd:CD_E,title:"Senador",where:uf,u:uf.toLowerCase()}];
+    $("main").innerHTML=RACES.map(r=>`<section class="col" id="${r.id}"></section>`).join("");
+  }
+  paintLoading();
+}
+const path=r=>{const u=r.u;return `/oficial/ele2026/${r.cd}/dados/${u}/${u}-c${String(r.cargo).padStart(4,"0")}-e${r.cd.padStart(6,"0")}-u.json`};
+async function getJSON(p){const r=await fetch(BASE+p+"?_="+Date.now(),{cache:"no-store"});if(!r.ok)throw new Error("HTTP "+r.status);return r.json()}
+
+function paintLoading(){RACES.forEach(r=>$(r.id).innerHTML=`<h2>${r.title} <small>${r.where}</small></h2><div class="meta">Carregando…</div>`)}
+function paint(r,d){
+  const S=d.s||{},E=d.e||{},V=d.v||{},carg=(d.carg||[])[0]||{};
+  const list=[];
+  (carg.agr||[]).forEach(a=>(a.par||[]).forEach(p=>(p.cand||[]).forEach(c=>list.push({
+    nm:c.nmu||c.nm||"?",n:c.n||"",part:p.sg||a.com||"",v:num(c.vap),p:pct(c.pvap),
+    e:String(c.e||"").toLowerCase()==="s",st:String(c.st||""),dvt:String(c.dvt||"")}))));
+  list.sort((a,b)=>(b.v||0)-(a.v||0));
+  const vagas=+carg.nv||1, pst=pct(S.pst), zero=!list.some(c=>c.v);
+  const where=r.where;
+  let h=`<h2>${r.title} <small>${where}${vagas>1?" · "+vagas+" vagas":""}</small></h2>
+  <div class="ch"><span class="meta">Seções apuradas</span><span class="big">${fp(pst)}</span></div>
+  <div class="prog"><i style="width:${pst||0}%"></i></div>
+  <div class="kp"><span>Comparec. <b>${fp(pct(E.pc))}</b></span><span>Válidos <b>${fmt(num(V.vvc))}</b></span><span>Brancos <b>${fp(pct(V.pvb))}</b></span><span>Nulos <b>${fp(pct(V.ptvn))}</b></span></div>
+  ${d.tf==="s"?`<div class="meta">🟢 Totalização final</div>`:""}`;
+  if(zero) h+=`<div class="note">⏳ Ainda sem votos totalizados. A divulgação começa após 17h (Brasília).</div>`;
+  const top=list.slice(0,r.mini?3:(zero?list.length:Math.max(6,vagas+3)));
+  h+=top.map((c,i)=>{
+    const tag=c.e?`<span class="tag t-el">🟢 eleito</span>`:/2.?\s*turno/i.test(c.st)?`<span class="tag t-2t">🟡 2º turno</span>`:"";
+    const warn=c.dvt&&!/^v[aá]lido$/i.test(c.dvt)?` · ⚠️ ${esc(c.dvt)}`:"";
+    return `<div class="cand ${!zero&&i<vagas?"lead":""}"><div class="ch"><span class="nm">${esc(c.nm)}${tag}</span><span class="pc">${fp(c.p)}</span></div>
+    <div class="meta">${esc(c.n)} · ${esc(c.part)} · ${fmt(c.v)} votos${warn}</div>
+    <div class="bar"><i style="width:${c.p||0}%"></i></div></div>`}).join("");
+  if(!zero&&list.length>top.length) h+=`<div class="meta" style="margin-top:6px">+ ${list.length-top.length} candidatos</div>`;
+  h+=`<div class="meta stamp" style="margin-top:auto;padding-top:8px">TSE: ${d.dg||""} ${d.hg||""}${d.ht?" · totalizado às "+d.ht:""}</div>`;
+  $(r.id).innerHTML=h;
+}
+let seq=0,lastOk=null;
+async function tick(){
+  const my=++seq;let fails=0;
+  await Promise.all(RACES.map(async r=>{
+    try{const d=await getJSON(path(r));if(my===seq&&$(r.id))paint(r,d)}
+    catch(e){fails++;if(my===seq&&$(r.id)&&!$(r.id).querySelector(".cand"))$(r.id).innerHTML=`<h2>${r.title} <small>${r.where}</small></h2><div class="err">🔴 Sem resposta do TSE (${esc(e.message)}). Tentando de novo em 30 s.</div>`}
+  }));
+  if(my!==seq)return;
+  if(fails<RACES.length)lastOk=new Date();
+  $("dot").classList.toggle("err",fails===RACES.length);
+  $("status").textContent=(fails===RACES.length?"sem conexão · ":fails?"parcial · ":"ao vivo · ")+(lastOk?"atualizado "+lastOk.toLocaleTimeString("pt-BR"):"");
+}
+// manter a tela do tablet ligada
+let lock=null;
+async function keepAwake(){
+  try{if("wakeLock"in navigator){lock=await navigator.wakeLock.request("screen");$("wake").textContent="· Tela mantida ligada.";lock.addEventListener("release",()=>{$("wake").textContent=""})}}
+  catch(e){$("wake").textContent="· Para a tela não apagar, ajuste o bloqueio automático do tablet."}
+}
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"){keepAwake();tick()}});
+document.addEventListener("click",()=>{if(!lock||lock.released)keepAwake()},{once:false});
+// auto-atualiza a página quando uma nova versão for publicada no GitHub
+async function checkVersion(){
+  if(!/^https?:/.test(location.protocol))return;
+  try{const r=await fetch("version.json?_="+Date.now(),{cache:"no-store"});if(!r.ok)return;
+    const v=(await r.json()).v;if(v&&String(v)!==APP_VERSION)location.replace(location.pathname+"?v="+encodeURIComponent(v)+"&uf="+uf);}catch(e){}
+}
+setInterval(checkVersion,60000);
+syncNav();build();tick();setInterval(tick,EVERY);keepAwake();
+</script>
+</body>
+</html>
