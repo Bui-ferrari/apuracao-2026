@@ -44,6 +44,8 @@ button,select,input{font:inherit;color:var(--ink)}
 #projLine:empty{display:none}
 #projLine b{font-variant-numeric:tabular-nums}
 #projLine .tag{margin-left:0}
+.projBox{display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:13px;margin:6px 0 2px;padding:5px 10px;border:1px dashed var(--line);border-radius:10px}
+.projBox .tag{margin-left:0}
 /* layout */
 #layout{display:grid;grid-template-columns:minmax(300px,44%) 1fr;gap:12px;padding:12px 16px}
 @media (max-width:820px){#layout{grid-template-columns:1fr}}
@@ -128,10 +130,10 @@ a{color:var(--acc)}
     </div>
   </section>
 </div>
-<footer>Dados abertos oficiais do TSE (resultados.tse.jus.br), lidos direto deste navegador a cada 30 s. Cores por orientação do partido do candidato que lidera (classificação aproximada). A projeção supõe que, em cada estado, as seções que faltam votam igual às já apuradas; é uma estimativa e pode errar alguns pontos. <a href="completo.html">Página com todos os cargos</a> <span id="wake"></span></footer>
+<footer>Dados abertos oficiais do TSE (resultados.tse.jus.br), lidos direto deste navegador a cada 30 s. Cores por orientação do partido do candidato que lidera (classificação aproximada). Projeções: em cada estado, as seções que faltam são estimadas pelo ritmo recente (votos das últimas atualizações) ou, sem histórico suficiente, pela média do já apurado. São estimativas e podem errar alguns pontos. <a href="completo.html">Página com todos os cargos</a> <span id="wake"></span></footer>
 
 <script>
-const APP_VERSION="7";
+const APP_VERSION="8";
 const BASE="https://resultados.tse.jus.br", CD_F="6257", CD_E="6259", EVERY=30000;
 const UFS=["AC","AL","AM","AP","BA","CE","DF","ES","GO","MA","MG","MS","MT","PA","PB","PE","PI","PR","RJ","RN","RO","RR","RS","SC","SE","SP","TO"];
 const UFNOME={AC:"Acre",AL:"Alagoas",AM:"Amazonas",AP:"Amapá",BA:"Bahia",CE:"Ceará",DF:"Distrito Federal",ES:"Espírito Santo",GO:"Goiás",MA:"Maranhão",MG:"Minas Gerais",MS:"Mato Grosso do Sul",MT:"Mato Grosso",PA:"Pará",PB:"Paraíba",PE:"Pernambuco",PI:"Piauí",PR:"Paraná",RJ:"Rio de Janeiro",RN:"Rio Grande do Norte",RO:"Rondônia",RR:"Roraima",RS:"Rio Grande do Sul",SC:"Santa Catarina",SE:"Sergipe",SP:"São Paulo",TO:"Tocantins"};
@@ -226,31 +228,76 @@ function diffHTML(r){
 }
 
 /* ---------- projeção ---------- */
-// Projeção A: em cada estado (e exterior), as seções que faltam votam igual às já apuradas ali.
-const PRES={};
-async function loadPres(){
-  await Promise.all(UFS.concat(["ZZ"]).map(async u=>{try{PRES[u]=parse(await get(1,u))}catch(e){}}));
-  renderProj();
+// Em cada estado: as seções que faltam votam no RITMO RECENTE (votos que entraram nas últimas
+// atualizações, cobrindo ~5% do eleitorado). Sem histórico suficiente, usa a média do já apurado.
+const PRES={}, GOV={};
+let SNAP=(()=>{try{return JSON.parse(localStorage.getItem("snap2")||"{}")||{}}catch(e){return{}}})();
+let snapDirty=false;
+function recordSnap(key,r){
+  if(!r||r.zero||!r.est||!r.vv)return;
+  const arr=SNAP[key]||(SNAP[key]=[]);const last=arr[arr.length-1];
+  if(last&&last.est===r.est)return;
+  if(last&&r.est<last.est)arr.length=0; // correção/reinício: descarta histórico
+  const c={};r.list.forEach(x=>{if(x.v)c[x.nm]=x.v});
+  arr.push({est:r.est,vv:r.vv,c});if(arr.length>60)arr.splice(0,arr.length-60);snapDirty=true;
 }
+function saveSnap(){if(!snapDirty)return;snapDirty=false;try{localStorage.setItem("snap2",JSON.stringify(SNAP))}catch(e){}}
+// devolve {tot:{nm:votos projetados}, vv:válidos projetados, mode:"ritmo"|"media"}
+function projectOne(key,r){
+  if(!r||r.zero||!r.est||!r.vv||!r.te)return null;
+  const rem=Math.max(0,r.te-r.est), cur={};r.list.forEach(x=>cur[x.nm]=x.v||0);
+  const arr=SNAP[key]||[];
+  let base=null;
+  for(let i=arr.length-1;i>=0;i--){const s=arr[i];if(s.est<r.est&&r.est-s.est>=0.05*r.te){base=s;break}}
+  if(!base&&arr.length&&arr[0].est<r.est&&r.est-arr[0].est>=0.01*r.te)base=arr[0];
+  let mode="media",share={},turn=r.vv/r.est;
+  if(base){
+    const dvv=r.vv-base.vv,dest=r.est-base.est;
+    if(dvv>0&&dest>0){
+      let ok=true;Object.keys(cur).forEach(nm=>{const d=cur[nm]-(base.c[nm]||0);if(d<0)ok=false;share[nm]=d/dvv});
+      if(ok){mode="ritmo";turn=dvv/dest}
+    }
+  }
+  if(mode==="media")Object.keys(cur).forEach(nm=>share[nm]=cur[nm]/r.vv);
+  const addVV=rem*turn,tot={};Object.keys(cur).forEach(nm=>tot[nm]=cur[nm]+share[nm]*addVV);
+  return {tot,vv:r.vv+addVV,mode};
+}
+async function loadPres(){
+  await Promise.all([
+    ...UFS.concat(["ZZ"]).map(async u=>{try{PRES[u]=parse(await get(1,u));recordSnap("p"+u,PRES[u])}catch(e){}}),
+    ...UFS.map(async u=>{try{GOV[u]=parse(await get(3,u));recordSnap("g"+u,GOV[u])}catch(e){}})
+  ]);
+  saveSnap();renderProj();
+}
+const f1=v=>v.toLocaleString("pt-BR",{minimumFractionDigits:1,maximumFractionDigits:1})+"%";
+const shortNm=x=>esc(x.split(" ").filter(w=>w.length>2||w===w.toUpperCase()).slice(0,2).map(w=>w[0]+w.slice(1).toLowerCase()).join(" "));
+function verdictOf(pa){return pa>50.5?`<span class="tag t-el">pode vencer no 1º turno</span>`:pa>=49.5?`<span class="tag t-2t">perto de 50%: indefinido</span>`:`<span class="tag t-2t">2º turno provável</span>`}
 function renderProj(){
-  const tot={};let pv=0,ok=0,miss=[];const part={};
+  const tot={},part={};let pv=0,ok=0,nr=0;const miss=[];
   UFS.concat(["ZZ"]).forEach(u=>{
-    const r=PRES[u];
-    if(!r||!r.est||!r.vv||r.zero){if(u!=="ZZ")miss.push(u);return}
-    const f=r.te/r.est;ok++;pv+=r.vv*f;
-    r.list.forEach(c=>{tot[c.nm]=(tot[c.nm]||0)+(c.v||0)*f;part[c.nm]=c.part});
+    const r=PRES[u],p=projectOne("p"+u,r);
+    if(!p){if(u!=="ZZ")miss.push(u);return}
+    ok++;if(p.mode==="ritmo")nr++;pv+=p.vv;
+    Object.keys(p.tot).forEach(nm=>tot[nm]=(tot[nm]||0)+p.tot[nm]);r.list.forEach(c=>part[c.nm]=c.part);
   });
   if(!pv||ok<10){$("projLine").innerHTML="";return}
   const rank=Object.keys(tot).sort((a,b)=>tot[b]-tot[a]);
   const a=rank[0],b=rank[1],pa=tot[a]*100/pv,pb=tot[b]*100/pv;
-  const f1=v=>v.toLocaleString("pt-BR",{minimumFractionDigits:1,maximumFractionDigits:1})+"%";
-  const nm=x=>esc(x.split(" ")[0][0]+x.split(" ")[0].slice(1).toLowerCase());
-  const verdict=pa>50.5?`<span class="tag t-el">pode vencer no 1º turno</span>`:pa>=49.5?`<span class="tag t-2t">perto de 50%: indefinido</span>`:`<span class="tag t-2t">2º turno provável</span>`;
   $("projLine").innerHTML=`<span class="meta">📈 Projeção (estimativa, não oficial):</span>
-    <span><span class="sw" style="background:${COLOR(ideo(part[a]))}"></span>${nm(a)} <b>${f1(pa)}</b></span>
-    <span><span class="sw" style="background:${COLOR(ideo(part[b]))}"></span>${nm(b)} <b>${f1(pb)}</b></span>
-    <span class="meta">diferença ≈ ${fmt(Math.round((tot[a]-tot[b])/1e5)*1e5)} votos</span>${verdict}
-    <span class="meta">se cada estado mantiver o ritmo atual${miss.length?` · sem dados: ${miss.join(", ")}`:""}</span>`;
+    <span><span class="sw" style="background:${COLOR(ideo(part[a]))}"></span>${shortNm(a)} <b>${f1(pa)}</b></span>
+    <span><span class="sw" style="background:${COLOR(ideo(part[b]))}"></span>${shortNm(b)} <b>${f1(pb)}</b></span>
+    <span class="meta">diferença ≈ ${fmt(Math.round((tot[a]-tot[b])/1e5)*1e5)} votos</span>${verdictOf(pa)}
+    <span class="meta">${nr?`ritmo recente em ${nr} de ${ok} regiões`:"média do já apurado (o ritmo entra após as próximas atualizações)"}${miss.length?` · sem dados: ${miss.join(", ")}`:""}</span>`;
+}
+function govProjHTML(u){
+  const r=GOV[u],p=projectOne("g"+u,r);
+  if(!p)return "";
+  const rank=Object.keys(p.tot).sort((x,y)=>p.tot[y]-p.tot[x]);const part={};r.list.forEach(c=>part[c.nm]=c.part);
+  const a=rank[0],b=rank[1],pa=p.tot[a]*100/p.vv,pb=b?p.tot[b]*100/p.vv:0;
+  return `<div class="projBox"><span class="meta">📈 Projeção (estimativa):</span>
+    <span><span class="sw" style="background:${COLOR(ideo(part[a]))}"></span>${shortNm(a)} <b>${f1(pa)}</b></span>
+    ${b?`<span><span class="sw" style="background:${COLOR(ideo(part[b]))}"></span>${shortNm(b)} <b>${f1(pb)}</b></span>`:""}
+    ${verdictOf(pa)}<span class="meta">${p.mode==="ritmo"?"pelo ritmo recente":"pela média do já apurado"}</span></div>`;
 }
 
 /* ---------- mapa ---------- */
@@ -288,18 +335,13 @@ function paintMap(){
 }
 async function loadMap(){
   const race=mapRace;
-  if(race===1){await loadPres();UFS.forEach(u=>{const r=PRES[u];if(r)leaders[1+u]={c:r.zero?null:r.list[0],pst:r.pst}})}
-  else{
-    await Promise.all(UFS.map(async u=>{
-      try{const r=parse(await get(race,u));leaders[race+u]={c:r.zero?null:r.list[0],pst:r.pst}}catch(e){}
-    }));
-    loadPres();
-  }
+  await loadPres();
+  [[1,PRES],[3,GOV]].forEach(([rc,C])=>UFS.forEach(u=>{const r=C[u];if(r)leaders[rc+u]={c:r.zero?null:r.list[0],pst:r.pst}}));
   if(race===mapRace)paintMap();
 }
 document.querySelectorAll("[data-mrace]").forEach(b=>b.onclick=()=>{
   mapRace=+b.dataset.mrace;document.querySelectorAll("[data-mrace]").forEach(x=>x.classList.toggle("on",x===b));
-  paintMap();loadMap();
+  paintMap();
 });
 
 /* ---------- painel do estado ---------- */
@@ -315,11 +357,11 @@ document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{
 document.querySelectorAll("[data-dep]").forEach(b=>b.onclick=()=>{
   depCargo=+b.dataset.dep;document.querySelectorAll("[data-dep]").forEach(x=>x.classList.toggle("on",x===b));$("q").value="";lastDep=null;loadState();
 });
-function raceHTML(title,r){
+function raceHTML(title,r,extra){
   if(!r)return `<div class="race"><h2>${title}</h2><div class="err">🔴 Sem resposta do TSE agora. Tentando de novo em 30 s.</div></div>`;
   const top=r.list.slice(0,r.zero?r.list.length:Math.max(5,r.vagas+3));
   return `<div class="race"><div class="ch"><h2>${title}${r.vagas>1?` <span class="meta">· ${r.vagas} vagas</span>`:""}</h2><span class="meta">${fp(r.pst)} apurado${r.d.tf==="s"?" · 🟢 final":""}</span></div>`+
-    (r.zero?`<div class="note">⏳ Ainda sem votos totalizados.</div>`:"")+
+    (r.zero?`<div class="note">⏳ Ainda sem votos totalizados.</div>`:(extra||""))+
     top.map((c,i)=>{const col=COLOR(ideo(c.part));return `<div class="cand"><div class="ch"><span class="nm"><span class="sw" style="background:${col}"></span>${esc(c.nm)}${tagOf(c)}</span><span class="pc">${fp(c.p)}</span></div>
     <div class="meta">${esc(c.n)} · ${esc(c.part)} · ${fmt(c.v)} votos${warnOf(c)}</div>
     <div class="bar"><i style="width:${c.p||0}%;background:${!r.zero&&i<r.vagas?col:"var(--bar)"}"></i></div></div>`}).join("")+
@@ -351,8 +393,9 @@ async function loadState(){
   if(tab==="maj"){
     const res=await Promise.all([1,3,5].map(c=>get(c,u).then(parse).catch(()=>null)));
     if(my!==stSeq)return;
+    if(res[1]){GOV[u]=res[1];recordSnap("g"+u,res[1]);saveSnap()}
     $("stPst").textContent=res[0]?fp(res[0].pst)+" das seções apuradas":"";
-    $("tabMaj").innerHTML=raceHTML("Presidente",res[0])+raceHTML("Governador",res[1])+raceHTML("Senador",res[2]);
+    $("tabMaj").innerHTML=raceHTML("Presidente",res[0])+raceHTML("Governador",res[1],govProjHTML(u))+raceHTML("Senador",res[2]);
   } else {
     const cg=(depCargo===7&&u==="DF")?8:depCargo;
     try{const r=parse(await get(cg,u));if(my!==stSeq)return;lastDep=r;$("depOut").innerHTML=depHTML(r)}
