@@ -133,7 +133,7 @@ a{color:var(--acc)}
 <footer>Dados abertos oficiais do TSE (resultados.tse.jus.br), lidos direto deste navegador a cada 30 s. Cores por orientação do partido do candidato que lidera (classificação aproximada). Projeções: em cada estado, as seções que faltam são estimadas pelo ritmo recente (votos das últimas atualizações) ou, sem histórico suficiente, pela média do já apurado. São estimativas e podem errar alguns pontos. <a href="completo.html">Página com todos os cargos</a> <span id="wake"></span></footer>
 
 <script>
-const APP_VERSION="8";
+const APP_VERSION="9";
 const BASE="https://resultados.tse.jus.br", CD_F="6257", CD_E="6259", EVERY=30000;
 const UFS=["AC","AL","AM","AP","BA","CE","DF","ES","GO","MA","MG","MS","MT","PA","PB","PE","PI","PR","RJ","RN","RO","RR","RS","SC","SE","SP","TO"];
 const UFNOME={AC:"Acre",AL:"Alagoas",AM:"Amazonas",AP:"Amapá",BA:"Bahia",CE:"Ceará",DF:"Distrito Federal",ES:"Espírito Santo",GO:"Goiás",MA:"Maranhão",MG:"Minas Gerais",MS:"Mato Grosso do Sul",MT:"Mato Grosso",PA:"Pará",PB:"Paraíba",PE:"Pernambuco",PI:"Piauí",PR:"Paraná",RJ:"Rio de Janeiro",RN:"Rio Grande do Norte",RO:"Rondônia",RR:"Roraima",RS:"Rio Grande do Sul",SC:"Santa Catarina",SE:"Sergipe",SP:"São Paulo",TO:"Tocantins"};
@@ -178,8 +178,29 @@ const th=store.get("theme");if(th)document.documentElement.dataset.theme=th;
 $("theme").onclick=()=>{const t=document.documentElement.dataset.theme==="light"?"dark":"light";document.documentElement.dataset.theme=t;store.set("theme",t)};
 
 /* ---------- barra Brasil ---------- */
+// O arquivo nacional do TSE às vezes atrasa em relação aos estaduais.
+// Quando a soma dos 27 estados + exterior está mais adiantada, usamos a soma.
+function aggregateBR(){
+  const regs=UFS.concat(["ZZ"]).map(u=>PRES[u]);
+  if(regs.slice(0,UFS.length).some(r=>!r))return null;
+  let st=0,ts=0,c=0,est=0,vb=0,tvn=0,tv=0,vv=0,hg="";const tot={},part={};
+  regs.forEach(r=>{if(!r)return;const d=r.d,S=d.s||{},E=d.e||{},V=d.v||{};
+    st+=num(S.st)||0;ts+=num(S.ts)||0;c+=num(E.c)||0;est+=num(E.est)||0;
+    vb+=num(V.vb)||0;tvn+=num(V.tvn)||0;tv+=num(V.tv)||0;vv+=num(V.vvc)||0;
+    if((d.dg||"")+(d.hg||"")>hg)hg=(d.dg||"")+(d.hg||"");
+    r.list.forEach(x=>{tot[x.nm]=(tot[x.nm]||0)+(x.v||0);part[x.nm]=x.part});});
+  if(!ts||!vv)return null;
+  const list=Object.keys(tot).map(nm=>({nm,part:part[nm],v:tot[nm],p:tot[nm]*100/vv,e:false,st:"",dvt:""})).sort((a,b)=>b.v-a.v);
+  return {list,pst:st*100/ts,zero:!list.some(x=>x.v),agg:true,hg:hg.slice(10),
+    d:{v:{pvb:tv?vb*100/tv:null,ptvn:tv?tvn*100/tv:null},e:{pc:est?c*100/est:null}}};
+}
+let dataTime="";
 async function loadBR(){
-  const r=parse(await get(1,"br"));
+  let br=null;try{br=parse(await get(1,"br"));br.hg=br.d.hg||""}catch(e){}
+  const ag=aggregateBR();
+  const r=(ag&&(!br||ag.pst>br.pst+0.01))?ag:br;
+  if(!r)throw new Error("sem dados");
+  dataTime=r.hg||"";
   $("brPst").textContent=fp(r.pst);$("brProg").style.width=(r.pst||0)+"%";
   const top=r.zero?r.list:r.list.slice(0,5);
   $("brChips").innerHTML=top.map(c=>`<div class="chip" style="border-left-color:${COLOR(ideo(c.part))}">
@@ -406,11 +427,13 @@ async function loadState(){
 /* ---------- ciclo ---------- */
 let lastOk=null;
 async function tick(){
-  const results=await Promise.allSettled([loadBR(),loadMap(),loadState()]);
+  const st=loadState();
+  await loadMap().catch(()=>{});
+  const results=await Promise.allSettled([loadBR(),st]);
   const ok=results[0].status==="fulfilled";
   if(ok)lastOk=new Date();
   $("dot").classList.toggle("err",!ok);
-  $("status").textContent=(ok?"ao vivo · ":"sem conexão · ")+(lastOk?"atualizado "+lastOk.toLocaleTimeString("pt-BR"):"");
+  $("status").textContent=(ok?"ao vivo":"sem conexão")+(dataTime?" · dados do TSE das "+dataTime.slice(0,5):"")+(lastOk?" · checado "+lastOk.toLocaleTimeString("pt-BR").slice(0,5):"");
 }
 let lock=null;
 async function keepAwake(){
