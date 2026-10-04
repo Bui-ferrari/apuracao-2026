@@ -43,6 +43,9 @@ h2{font-size:17px;margin:0}
 #map svg{width:100%;height:auto;display:block}
 #map path{stroke:var(--card);stroke-width:1.6;cursor:pointer;transition:fill .6s}
 #map path.sel{stroke:var(--ink);stroke-width:4}
+#map text.out{fill:var(--ink);stroke:none}
+#map line.co{stroke:var(--mute);stroke-width:1.2;opacity:.7}
+#map text.pst{font-weight:600;fill:#fff;opacity:.95}
 #map text{font-size:20px;font-weight:700;fill:#fff;paint-order:stroke;stroke:rgba(0,0,0,.45);stroke-width:3px;pointer-events:none;text-anchor:middle;dominant-baseline:middle}
 .legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--mute);margin-top:6px}
 .legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:4px;vertical-align:-1px}
@@ -89,7 +92,7 @@ a{color:var(--acc)}
     </div>
     <div id="map"></div>
     <div id="hover" class="meta"></div>
-    <div class="meta">Toque num estado para ver os resultados dele ao lado.</div>
+    <div class="meta">Número em cada estado = % das seções já apuradas. Toque num estado para ver os resultados dele ao lado.</div>
     <div class="legend"><span><i style="background:var(--esq)"></i>Esquerda</span><span><i style="background:var(--cen)"></i>Centro</span><span><i style="background:var(--dir)"></i>Direita</span><span><i style="background:var(--empty)"></i>Sem votos ainda</span></div>
   </section>
 
@@ -113,7 +116,7 @@ a{color:var(--acc)}
 <footer>Dados abertos oficiais do TSE (resultados.tse.jus.br), lidos direto deste navegador a cada 30 s. Cores por orientação do partido do candidato que lidera (classificação aproximada). <a href="completo.html">Página com todos os cargos</a> <span id="wake"></span></footer>
 
 <script>
-const APP_VERSION="4";
+const APP_VERSION="5";
 const BASE="https://resultados.tse.jus.br", CD_F="6257", CD_E="6259", EVERY=30000;
 const UFS=["AC","AL","AM","AP","BA","CE","DF","ES","GO","MA","MG","MS","MT","PA","PB","PE","PI","PR","RJ","RN","RO","RR","RS","SC","SE","SP","TO"];
 const UFNOME={AC:"Acre",AL:"Alagoas",AM:"Amazonas",AP:"Amapá",BA:"Bahia",CE:"Ceará",DF:"Distrito Federal",ES:"Espírito Santo",GO:"Goiás",MA:"Maranhão",MG:"Minas Gerais",MS:"Mato Grosso do Sul",MT:"Mato Grosso",PA:"Pará",PB:"Paraíba",PE:"Pernambuco",PI:"Piauí",PR:"Paraná",RJ:"Rio de Janeiro",RN:"Rio Grande do Norte",RO:"Rondônia",RR:"Roraima",RS:"Rio Grande do Sul",SC:"Santa Catarina",SE:"Sergipe",SP:"São Paulo",TO:"Tocantins"};
@@ -126,6 +129,7 @@ const norm=s=>String(s||"").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g,""
 const IDX={};Object.entries(IDEO).forEach(([k,l])=>l.forEach(p=>IDX[norm(p)]=k));
 const ideo=sg=>IDX[norm(sg)]||"nd";
 const COLOR=k=>`var(--${k})`;
+const pctShort=n=>(n>=99.995?"100":n<10?n.toLocaleString("pt-BR",{maximumFractionDigits:1}):Math.floor(n).toString())+"%";
 
 const $=id=>document.getElementById(id);
 const store={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}}};
@@ -170,10 +174,14 @@ async function loadBR(){
 let MAP=null; const leaders={};
 async function initMap(){
   try{MAP=await (await fetch("brasil-map.json")).json()}catch(e){$("map").innerHTML=`<div class="err">Não consegui carregar o mapa.</div>`;return}
-  const small={DF:[0,0],SE:[0,0],AL:[0,0],RN:[0,0],PB:[0,0],ES:[0,0],RJ:[0,0]};
-  $("map").innerHTML=`<svg viewBox="0 0 970 990" role="img" aria-label="Mapa do Brasil">`+
+  const small={DF:1};
+  const CALLOUT={RN:[1012,240],PB:[1012,292],PE:[1012,344],AL:[1012,396],SE:[1012,448],ES:[895,610],RJ:[830,765]};
+  $("map").innerHTML=`<svg viewBox="0 0 1050 990" role="img" aria-label="Mapa do Brasil">`+
     UFS.map(u=>`<path id="m-${u}" d="${MAP.p[u]}" fill="var(--empty)"><title>${UFNOME[u]}</title></path>`).join("")+
-    UFS.map(u=>{const [x,y]=MAP.l[u];return `<text x="${x}" y="${y}" style="font-size:${small[u]?15:20}px">${u}</text>`}).join("")+`</svg>`;
+    UFS.map(u=>{let [x,y]=MAP.l[u],sm=small[u],line="";const co=CALLOUT[u];
+      const cl=co?' class="out"':"";
+      if(co){line=`<line class="co" x1="${x}" y1="${y}" x2="${co[0]-26}" y2="${co[1]}"/>`;[x,y]=co;sm=false}
+      return `${line}<text${cl} x="${x}" y="${y-(sm?7:11)}" style="font-size:${sm?16:22}px">${u}</text><text class="pst${co?" out":""}" id="p-${u}" x="${x}" y="${y+(sm?9:12)}" style="font-size:${sm?13:17}px"></text>`}).join("")+`</svg>`;
   UFS.forEach(u=>{const el=$("m-"+u);el.onclick=()=>selectUF(u);el.onmouseenter=()=>showHover(u);el.onmouseleave=()=>showHover(sel)});
   paintMap();
 }
@@ -187,12 +195,13 @@ function paintMap(){
     const el=$("m-"+u);if(!el)return;
     const L=leaders[mapRace+u];
     el.setAttribute("fill",L&&L.c?COLOR(ideo(L.c.part)):"var(--empty)");
+    const pt=$("p-"+u);if(pt)pt.textContent=L&&L.pst!=null?pctShort(L.pst):"";
     el.classList.toggle("sel",u===sel);
   });
   const s=$("m-"+sel);if(s)s.parentNode.appendChild(s); // borda do selecionado por cima
   showHover(sel);
   // rótulos por cima de tudo
-  const svg=$("map").querySelector("svg");if(svg)svg.querySelectorAll("text").forEach(t=>svg.appendChild(t));
+  const svg=$("map").querySelector("svg");if(svg)svg.querySelectorAll("line,text").forEach(t=>svg.appendChild(t));
 }
 async function loadMap(){
   const race=mapRace;
